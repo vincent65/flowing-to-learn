@@ -491,3 +491,6 @@ def main() -> None:
     entanglement_path.write_text(json.dumps(entanglement_curves, indent=2))
     print(f"\nSaved metrics summary to {metrics_path}")
     print(f"Saved entanglement curves to {entanglement_path}")
+
+if __name__ == "__main__":
+    main()

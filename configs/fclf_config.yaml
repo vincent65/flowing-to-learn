@@ -1,0 +1,22 @@
+model:
+  embedding_dim: 512
+  num_attributes: 5
+  hidden_dim: 256
+  projection_radius: 1.0  # cs229.ipynb: project to unit sphere after each flow step
+
+training:
+  num_epochs: 50
+  batch_size: 512  # Increased from 128 to fully utilize L4 GPU (23GB memory)
+  learning_rate: 0.0001  # 1e-4 in decimal notation for YAML compatibility
+  alpha: 0.1  # MODERATE_FIX: Reduced from 0.15 for more stable trajectories
+
+loss:
+  temperature: 0.1  # cs229.ipynb: tau=0.1 (was 0.07)
+  lambda_contrastive: 0.7  # MODERATE_FIX: Reduced from 1.0 to prevent point attractors
+  lambda_curl: 0.01  # cs229.ipynb: small regularization (was 0.05)
+  lambda_div: 0.01   # cs229.ipynb: small regularization (was 0.05)
+  lambda_identity: 0.3  # MODERATE_FIX: Restored from 0.0 to prevent embedding collapse
+
+inference:
+  num_flow_steps: 20  # MODERATE_FIX: Increased from 10 for smoother trajectories
+  step_size: 0.05  # MODERATE_FIX: Reduced from 0.1 for finer-grained flow

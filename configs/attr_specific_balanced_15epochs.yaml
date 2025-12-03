@@ -1,0 +1,32 @@
+# BALANCED CONFIG - 15 EPOCHS TEST
+# Testing if oscillation and low linear probe accuracy improve with more training
+
+model:
+  embedding_dim: 512
+  num_attributes: 5
+  hidden_dim: 256
+  projection_radius: 1.0
+
+data:
+  celeba_root: "data/celeba"
+  embedding_dir: "data/embeddings"
+
+training:
+  num_epochs: 15  # Middle of 10-20 range
+  batch_size: 512
+  learning_rate: 0.0001
+  alpha: 0.1
+  flow_steps: 10
+  use_no_contrastive: true
+
+loss:
+  lambda_classifier: 2.0  # Stronger than original
+  lambda_orthogonal: 0.1
+  lambda_identity: 0.2   # Weaker than original
+  lambda_smoothness: 0.1
+  lambda_curl: 0.0
+  lambda_div: 0.0
+
+inference:
+  num_flow_steps: 10
+  step_size: 0.1

@@ -1,0 +1,28 @@
+model:
+  embedding_dim: 512
+  num_attributes: 5
+  hidden_dim: 256
+  projection_radius: 1.0
+
+training:
+  num_epochs: 100
+  batch_size: 512
+  learning_rate: 0.0001
+  alpha: 0.12  # Moderate step size
+
+loss:
+  type: "gaussian_mixture"  # NEW: Soft clustering instead of hard InfoNCE
+
+  # Gaussian mixture parameters
+  num_components_per_attr: 3  # Allow 3 sub-clusters per attribute value
+  mixture_temperature: 0.3    # Controls cluster softness
+
+  # Regularization
+  lambda_identity: 0.2        # Stay near manifold
+  lambda_curl: 0.02           # Smooth flows
+  lambda_div: 0.02            # Preserve volume
+  lambda_separation: 0.1      # Encourage cluster separation
+
+inference:
+  num_flow_steps: 10
+  step_size: 0.1

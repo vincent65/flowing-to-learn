@@ -246,7 +246,7 @@ def make_retrieval_grid(
     os.makedirs(output_dir, exist_ok=True)
 
     # Normalize once for similarity
-    all_emb_norm = torch.nn.functional.normalize(all_embeddings.to(device), dim=-1)
+    all_emb_norm = torch.nn.functional.normalize(all_embeddings.to(device).float(), dim=-1)
 
     # Choose negative examples
     mask_neg = attrs[:, attr_idx] == 0
@@ -263,7 +263,7 @@ def make_retrieval_grid(
     )
 
     for row, idx in enumerate(neg_indices):
-        z0 = all_embeddings[idx : idx + 1].to(device)
+        z0 = all_embeddings[idx : idx + 1].to(device).float()
         y0 = attrs[idx : idx + 1].to(device)
         y_target = y0.clone()
         y_target[:, attr_idx] = 1

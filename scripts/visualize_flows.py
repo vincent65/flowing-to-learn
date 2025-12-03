@@ -10,6 +10,13 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.utils import shuffle as sk_shuffle
 
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from celeba_embeddings import (
     load_embeddings_splits,
     get_attribute_indices,

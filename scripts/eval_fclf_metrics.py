@@ -1,5 +1,6 @@
 import argparse
 import os
+import json
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -237,6 +238,67 @@ def attribute_trajectory_curves(
     return all_traj.mean(axis=0)
 
 
+def attribute_entanglement_curves(
+    model: ConditionalVectorField,
+    clf_dict: Dict[str, "LogisticRegression"],
+    X_init: torch.Tensor,
+    Y_init: torch.Tensor,
+    attr_idx: int,
+    num_steps: int,
+    device: torch.device,
+) -> Dict[str, np.ndarray]:
+    """
+    Tracks how all attributes' probabilities change when flowing toward attr_idx = 1.
+    Uses negatives (attr_idx == 0) as starting points.
+    Returns:
+        curves[attr_name] = np.array of length num_steps+1 with mean probabilities.
+    """
+    mask = Y_init[:, attr_idx] == 0
+    X0 = X_init[mask]
+    Y0 = Y_init[mask]
+
+    if X0.shape[0] == 0:
+        return {name: np.zeros(num_steps + 1, dtype=np.float32) for name in clf_dict.keys()}
+
+    ds = EmbeddingDataset(X0, Y0)
+    loader = DataLoader(ds, batch_size=256, shuffle=False)
+
+    attr_names = list(clf_dict.keys())
+    sum_curves = {name: np.zeros(num_steps + 1, dtype=np.float64) for name in attr_names}
+    count_steps = np.zeros(num_steps + 1, dtype=np.float64)
+
+    model.eval()
+    with torch.no_grad():
+        for z_batch, y_batch in loader:
+            z = z_batch.to(device)
+            y = y_batch.to(device)
+            y_target = y.clone()
+            y_target[:, attr_idx] = 1
+
+            z_t = z
+            for step in range(num_steps + 1):
+                z_np = _to_numpy(z_t)
+                batch_size = z_np.shape[0]
+                for attr_name, clf in clf_dict.items():
+                    probs = clf.predict_proba(z_np)[:, 1]
+                    sum_curves[attr_name][step] += probs.sum()
+                count_steps[step] += batch_size
+
+                if step < num_steps:
+                    z_t, _ = integrate_flow(
+                        model=model,
+                        z0=z_t,
+                        y=y_target,
+                        num_steps=1,
+                    )
+
+    curves = {}
+    denom = np.maximum(count_steps, 1e-8)
+    for attr_name in attr_names:
+        curves[attr_name] = (sum_curves[attr_name] / denom).astype(np.float32)
+    return curves
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Quantitative evaluation for FCLF.")
     parser.add_argument(
@@ -257,6 +319,12 @@ def parse_args() -> argparse.Namespace:
         default=10,
         help="Number of flow steps to apply when computing flowed embeddings.",
     )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="eval/metrics",
+        help="Directory to store evaluation summaries.",
+    )
     return parser.parse_args()
 
 
@@ -266,6 +334,10 @@ def main() -> None:
     ckpt_path = args.checkpoint_path
     embedding_dir = args.embedding_dir
     num_steps_flow = args.num_steps_flow
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = output_dir / "metrics_summary.txt"
+    entanglement_path = output_dir / "entanglement_curves.json"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -354,6 +426,9 @@ def main() -> None:
 
     # Attribute trajectory curves using raw linear probes as frozen classifiers
     print("\n=== Attribute trajectory curves (mean p(attr=1) vs step) ===")
+    lines.append("")
+    lines.append("=== Attribute trajectory curves (mean p(attr=1) vs step) ===")
+    trajectory_curves = {}
     for j, attr_name in enumerate(target_attrs):
         clf = raw_probe_models[attr_name]
         curve = attribute_trajectory_curves(
@@ -366,9 +441,38 @@ def main() -> None:
             device=device,
         )
         print(f"{attr_name:10s}:", " ".join(f"{p: .3f}" for p in curve))
+        lines.append(f"{attr_name:10s}: " + " ".join(f"{p: .3f}" for p in curve))
+        trajectory_curves[attr_name] = [float(p) for p in curve]
 
+    print("\n=== Attribute entanglement diagnostics ===")
+    lines.append("")
+    lines.append("=== Attribute entanglement diagnostics ===")
+    entanglement_curves = {}
+    for j, attr_name in enumerate(target_attrs):
+        curves = attribute_entanglement_curves(
+            model=model,
+            clf_dict=raw_probe_models,
+            X_init=train_split.embeddings,
+            Y_init=train_attrs,
+            attr_idx=j,
+            num_steps=num_steps_flow,
+            device=device,
+        )
+        print(f"\nTarget attribute: {attr_name}")
+        lines.append("")
+        lines.append(f"Target attribute: {attr_name}")
+        for other_name in target_attrs:
+            curve = curves[other_name]
+            print(f"  {other_name:10s}: ", " ".join(f"{p: .3f}" for p in curve))
+            lines.append(
+                f"  {other_name:10s}: " + " ".join(f"{p: .3f}" for p in curve)
+            )
+        entanglement_curves[attr_name] = {
+            other: [float(v) for v in vals]
+            for other, vals in curves.items()
+        }
 
-if __name__ == "__main__":
-    main()
-
-
+    metrics_path.write_text("\n".join(lines))
+    entanglement_path.write_text(json.dumps(entanglement_curves, indent=2))
+    print(f"\nSaved metrics summary to {metrics_path}")
+    print(f"Saved entanglement curves to {entanglement_path}")

@@ -1,13 +1,13 @@
 import argparse
 import os
-from typing import List, Tuple
+from pathlib import Path
+from typing import List
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
 import sys
-from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -74,6 +74,7 @@ def evaluate_multi_step_stability(
     embedding_dir: str,
     num_steps: int,
     batch_size: int,
+    output_dir: Path,
 ) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -118,6 +119,18 @@ def evaluate_multi_step_stability(
     print(f"=== Multi-step stability diagnostics ({os.path.basename(ckpt_path)}) ===")
     for k in range(num_steps):
         print(f"step {k+1:02d}: mean ||Δz||^2 = {mean_shifts[k].item():.6f}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = output_dir / "stability_summary.txt"
+    lines = [
+        f"Checkpoint: {ckpt_path}",
+        f"num_steps: {num_steps}",
+        "",
+        "=== Multi-step stability diagnostics ===",
+    ]
+    for k in range(num_steps):
+        lines.append(f"step {k+1:02d}: mean ||Δz||^2 = {mean_shifts[k].item():.6f}")
+    summary_path.write_text("\n".join(lines))
+    print(f"Saved stability summary to {summary_path}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -146,6 +159,12 @@ def parse_args() -> argparse.Namespace:
         default=256,
         help="Batch size for evaluation.",
     )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="eval/stability",
+        help="Directory to store stability summaries.",
+    )
     return parser.parse_args()
 
 
@@ -156,6 +175,7 @@ if __name__ == "__main__":
         embedding_dir=args.embedding_dir,
         num_steps=args.num_steps,
         batch_size=args.batch_size,
+        output_dir=Path(args.output_dir),
     )
 
 

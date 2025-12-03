@@ -162,7 +162,8 @@ def make_vector_field_quiver(
     attrs: torch.Tensor,
     attr_idx: int,
     attr_name: str,
-    num_points: int = 500,
+    num_points: int = 200,
+    negatives_only: bool = True,
     device: torch.device = torch.device("cpu"),
     output_dir: str = "notebooks/figures",
 ) -> None:
@@ -171,6 +172,13 @@ def make_vector_field_quiver(
     # Subsample points for quiver
     X_np = _to_numpy(embeddings)
     Y_np = _to_numpy(attrs)
+
+    if negatives_only:
+        neg_mask = Y_np[:, attr_idx] == 0
+        if neg_mask.sum() > 0:
+            X_np = X_np[neg_mask]
+            Y_np = Y_np[neg_mask]
+
     X_sub, Y_sub = sk_shuffle(X_np, Y_np, random_state=1)
     X_sub = X_sub[:num_points]
     Y_sub = Y_sub[:num_points]
@@ -179,7 +187,7 @@ def make_vector_field_quiver(
     X_pca = pca.fit_transform(X_sub)
 
     # Compute one-step tangential field and project to 2D
-    z = torch.from_numpy(X_sub).to(device)
+    z = torch.from_numpy(X_sub).to(device).float()
     y = torch.from_numpy(Y_sub).to(device)
     y_target = y.clone()
     y_target[:, attr_idx] = 1
@@ -202,8 +210,8 @@ def make_vector_field_quiver(
         X_pca[:, 1],
         c=Y_sub[:, attr_idx],
         cmap="coolwarm",
-        s=8,
-        alpha=0.6,
+        s=18,
+        alpha=0.4,
     )
     plt.quiver(
         X_pca[:, 0],
@@ -213,9 +221,12 @@ def make_vector_field_quiver(
         angles="xy",
         scale_units="xy",
         scale=1.0,
-        width=0.002,
+        width=0.003,
+        headwidth=4,
+        headlength=5,
+        headaxislength=4,
         color="black",
-        alpha=0.8,
+        alpha=0.9,
     )
     plt.title(f"Projected vector field toward {attr_name}=1 in PCA space")
     plt.tight_layout()
@@ -321,16 +332,28 @@ def parse_args() -> argparse.Namespace:
         help="Path to CelebA root for retrieving nearest-neighbor images.",
     )
     parser.add_argument(
-        "--attr_name",
+        "--attr_names",
         type=str,
-        default="Smiling",
-        help="Attribute to visualize.",
+        nargs="+",
+        default=["Smiling"],
+        help="Attribute(s) to visualize. Can specify multiple, e.g., --attr_names Smiling Young Male",
+    )
+    parser.add_argument(
+        "--all_attrs",
+        action="store_true",
+        help="Visualize all available attributes (overrides --attr_names).",
     )
     parser.add_argument(
         "--num_steps",
         type=int,
         default=10,
         help="Number of flow steps for trajectories.",
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="notebooks/figures",
+        help="Directory to store visualization outputs.",
     )
     return parser.parse_args()
 
@@ -341,8 +364,9 @@ def main() -> None:
     ckpt_path = args.checkpoint_path
     embedding_dir = args.embedding_dir
     celeba_root = args.celeba_root
-    attr_name = args.attr_name
+    attr_names = args.attr_names
     num_steps = args.num_steps
+    output_dir = args.output_dir
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -371,48 +395,66 @@ def main() -> None:
         + list(test_split.filenames)
     )
 
-    # Focus on a single attribute (e.g., Smiling) for the main visualizations
-    if attr_name not in target_attrs:
+    # Determine which attributes to visualize
+    if args.all_attrs:
+        attrs_to_visualize = target_attrs
+    else:
+        attrs_to_visualize = attr_names
+
+    # Validate all requested attributes
+    invalid_attrs = [attr for attr in attrs_to_visualize if attr not in target_attrs]
+    if invalid_attrs:
         raise ValueError(
-            f"Attribute '{attr_name}' not in target set {target_attrs}. "
-            "Update scripts/visualize_flows.py to include it."
+            f"Invalid attribute(s): {invalid_attrs}. "
+            f"Available attributes: {target_attrs}"
         )
-    attr_idx = target_attrs.index(attr_name)
 
-    make_pca_scatter_with_trajectories(
-        model=model,
-        embeddings=embeddings_val,
-        attrs=attrs_val,
-        attr_idx=attr_idx,
-        attr_name=attr_name,
-        num_points=3000,
-        num_traj=50,
-        num_steps=num_steps,
-        device=device,
-    )
+    # Generate visualizations for each requested attribute
+    print(f"Generating visualizations for {len(attrs_to_visualize)} attribute(s): {attrs_to_visualize}")
+    for attr_name in attrs_to_visualize:
+        print(f"\nProcessing attribute: {attr_name}")
+        attr_idx = target_attrs.index(attr_name)
 
-    make_vector_field_quiver(
-        model=model,
-        embeddings=embeddings_val,
-        attrs=attrs_val,
-        attr_idx=attr_idx,
-        attr_name=attr_name,
-        num_points=500,
-        device=device,
-    )
+        make_pca_scatter_with_trajectories(
+            model=model,
+            embeddings=embeddings_val,
+            attrs=attrs_val,
+            attr_idx=attr_idx,
+            attr_name=attr_name,
+            num_points=3000,
+            num_traj=50,
+            num_steps=num_steps,
+            device=device,
+            output_dir=output_dir,
+        )
 
-    make_retrieval_grid(
-        model=model,
-        all_embeddings=all_embeddings,
-        all_filenames=all_filenames,
-        attrs=torch.cat([train_attrs, val_attrs, test_attrs], dim=0),
-        attr_idx=attr_idx,
-        attr_name=attr_name,
-        celeba_root=celeba_root,
-        num_examples=4,
-        num_steps=min(6, num_steps),
-        device=device,
-    )
+        make_vector_field_quiver(
+            model=model,
+            embeddings=embeddings_val,
+            attrs=attrs_val,
+            attr_idx=attr_idx,
+            attr_name=attr_name,
+            num_points=200,
+            negatives_only=True,
+            device=device,
+            output_dir=output_dir,
+        )
+
+        make_retrieval_grid(
+            model=model,
+            all_embeddings=all_embeddings,
+            all_filenames=all_filenames,
+            attrs=torch.cat([train_attrs, val_attrs, test_attrs], dim=0),
+            attr_idx=attr_idx,
+            attr_name=attr_name,
+            celeba_root=celeba_root,
+            num_examples=4,
+            num_steps=min(6, num_steps),
+            device=device,
+            output_dir=output_dir,
+        )
+    
+    print(f"\nCompleted visualizations for all {len(attrs_to_visualize)} attribute(s)!")
 
 
 if __name__ == "__main__":

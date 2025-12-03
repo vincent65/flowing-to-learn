@@ -1,5 +1,6 @@
+import argparse
 import os
-from typing import List, Tuple
+from typing import List
 
 import numpy as np
 import torch
@@ -25,11 +26,11 @@ def _to_numpy(t: torch.Tensor) -> np.ndarray:
 def run_linear_probes(
     embedding_dir: str,
     target_attrs: List[str],
+    output_path: Path,
 ) -> None:
     """
     Train simple linear classifiers on raw CLIP embeddings for selected attributes.
-
-    Prints accuracy and F1 scores on the validation split.
+    Stores the summary in output_path.
     """
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import accuracy_score, f1_score
@@ -42,6 +43,7 @@ def run_linear_probes(
     Y_train = select_attributes(train, attr_indices)
     Y_val = select_attributes(val, attr_indices)
 
+    output_lines = ["=== Linear Probes on Raw CLIP Embeddings ==="]
     print("=== Linear Probes on Raw CLIP Embeddings ===")
     for j, attr_name in enumerate(attr_indices.keys()):
         y_tr = _to_numpy(Y_train[:, j])
@@ -58,22 +60,28 @@ def run_linear_probes(
         f1 = f1_score(y_va, y_pred)
         pos_rate = y_va.mean()
 
-        print(
+        line = (
             f"{attr_name:10s} | val_acc = {acc: .4f} | val_f1 = {f1: .4f} | "
             f"pos_rate = {pos_rate: .3f}"
         )
+        print(line)
+        output_lines.append(line)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(output_lines))
+    print(f"[INFO] Saved baseline metrics to {output_path}")
 
 
 def plot_pca_umap(
     embedding_dir: str,
     attr_name: str,
-    max_points: int = 10000,
-    output_dir: str = "notebooks/figures",
+    max_points: int,
+    output_dir: Path,
 ) -> None:
     """
     Create PCA (and optionally UMAP) 2D plots of raw embeddings colored by a single attribute.
     """
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     from sklearn.decomposition import PCA
     import matplotlib.pyplot as plt
@@ -111,9 +119,9 @@ def plot_pca_umap(
         alpha=0.5,
     )
     plt.colorbar(label=f"{attr_name} (0/1)")
-    plt.title(f"Raw CLIP Embeddings PCA – colored by {attr_name}")
+    plt.title(f"Raw CLIP embeddings PCA – colored by {attr_name}")
     plt.tight_layout()
-    pca_path = os.path.join(output_dir, f"raw_clip_pca_{attr_name.lower()}.png")
+    pca_path = output_dir / f"raw_clip_pca_{attr_name.lower()}.png"
     plt.savefig(pca_path, dpi=200)
     plt.close()
     print(f"[INFO] Saved PCA plot to {pca_path}")
@@ -132,9 +140,9 @@ def plot_pca_umap(
             alpha=0.5,
         )
         plt.colorbar(label=f"{attr_name} (0/1)")
-        plt.title(f"Raw CLIP Embeddings UMAP – colored by {attr_name}")
+        plt.title(f"Raw CLIP embeddings UMAP – colored by {attr_name}")
         plt.tight_layout()
-        umap_path = os.path.join(output_dir, f"raw_clip_umap_{attr_name.lower()}.png")
+        umap_path = output_dir / f"raw_clip_umap_{attr_name.lower()}.png"
         plt.savefig(umap_path, dpi=200)
         plt.close()
         print(f"[INFO] Saved UMAP plot to {umap_path}")
@@ -142,11 +150,54 @@ def plot_pca_umap(
         print("[WARN] `umap-learn` is not installed; skipping UMAP plot.")
 
 
-if __name__ == "__main__":
-    EMB_DIR = "data/embeddings"
-    TARGET_ATTRS = ["Smiling", "Young", "Male", "Eyeglasses", "Mustache"]
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Baseline CLIP embedding evaluations.")
+    parser.add_argument(
+        "--embedding_dir",
+        type=str,
+        default="data/embeddings",
+        help="Directory with precomputed embeddings.",
+    )
+    parser.add_argument(
+        "--attr_names",
+        type=str,
+        nargs="+",
+        default=["Smiling", "Young", "Male", "Eyeglasses", "Mustache"],
+        help="Attributes to evaluate.",
+    )
+    parser.add_argument(
+        "--metrics_output",
+        type=str,
+        default="eval/baseline/linear_probe_metrics.txt",
+        help="Path to save linear probe summary.",
+    )
+    parser.add_argument(
+        "--figure_dir",
+        type=str,
+        default="eval/baseline",
+        help="Directory to store PCA/UMAP plots.",
+    )
+    parser.add_argument(
+        "--max_points",
+        type=int,
+        default=10000,
+        help="Max number of embeddings to use for PCA/UMAP plots.",
+    )
+    return parser.parse_args()
 
-    run_linear_probes(EMB_DIR, TARGET_ATTRS)
-    plot_pca_umap(EMB_DIR, attr_name="Smiling")
+
+if __name__ == "__main__":
+    args = parse_args()
+    metrics_path = Path(args.metrics_output)
+    figure_dir = Path(args.figure_dir)
+
+    run_linear_probes(args.embedding_dir, args.attr_names, metrics_path)
+    for attr in args.attr_names:
+        plot_pca_umap(
+            embedding_dir=args.embedding_dir,
+            attr_name=attr,
+            max_points=args.max_points,
+            output_dir=figure_dir,
+        )
 
 

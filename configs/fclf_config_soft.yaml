@@ -1,0 +1,23 @@
+model:
+  embedding_dim: 512
+  num_attributes: 5
+  hidden_dim: 256
+  projection_radius: 1.0
+
+training:
+  num_epochs: 50
+  batch_size: 512
+  learning_rate: 0.0001
+  alpha: 0.05        # smaller per-step motion for smoother flows
+
+loss:
+  temperature: 0.1
+  lambda_contrastive: 0.5   # slightly softer clustering
+  lambda_curl: 0.01
+  lambda_div: 0.01
+  lambda_identity: 0.5      # stronger manifold preservation
+
+inference:
+  num_flow_steps: 20
+  step_size: 0.05
+

@@ -44,9 +44,13 @@ HP_DIR = Path("eval/hp_search")
 RUNS_DIR = Path("eval/hp_runs")
 
 DATASET_TO_ATTR = {
-    "celeba_eyeglasses": "Eyeglasses",
     "celeba_smiling": "Smiling",
+    "celeba_young": "Young",
+    "celeba_male": "Male",
+    "celeba_eyeglasses": "Eyeglasses",
+    "celeba_mustache": "Mustache",
 }
+ALL_DATASETS = list(DATASET_TO_ATTR.keys())
 
 
 @dataclass
@@ -56,14 +60,15 @@ class ExperimentResult:
     checkpoint_path: str
     metrics_path: str
     plots_dir: str
-    loss_log_path: Optional[str] = None
-    loss_plot_path: Optional[str] = None
-    classifier_log_path: Optional[str] = None
     train_acc: float
     val_acc: float
     val_auc: float
     within_dist: float
     between_dist: float
+    loss_log_path: Optional[str] = None
+    loss_plot_path: Optional[str] = None
+    classifier_log_path: Optional[str] = None
+    aggregate_metric: Optional[float] = None
 
     def to_log_row(self) -> Dict:
         row = {
@@ -72,14 +77,15 @@ class ExperimentResult:
             "checkpoint_path": self.checkpoint_path,
             "metrics_path": self.metrics_path,
             "plots_dir": self.plots_dir,
-            "loss_log_path": self.loss_log_path,
-            "loss_plot_path": self.loss_plot_path,
-            "classifier_log_path": self.classifier_log_path,
             "train_acc": self.train_acc,
             "val_acc": self.val_acc,
             "val_auc": self.val_auc,
             "within_dist": self.within_dist,
             "between_dist": self.between_dist,
+            "loss_log_path": self.loss_log_path,
+            "loss_plot_path": self.loss_plot_path,
+            "classifier_log_path": self.classifier_log_path,
+            "aggregate_metric": self.aggregate_metric,
         }
         return row
 
@@ -298,6 +304,7 @@ def _log_result(dataset_name: str, row: Dict) -> None:
         "val_auc",
         "within_dist",
         "between_dist",
+        "aggregate_metric",
     ]
     row = {k: row.get(k) for k in fieldnames}
 
@@ -314,6 +321,51 @@ def _log_result(dataset_name: str, row: Dict) -> None:
         entries = []
     entries.append(row)
     json_path.write_text(json.dumps(entries, indent=2))
+
+
+def _aggregate_results(
+    results: List[ExperimentResult],
+    metric: str = "val_acc",
+) -> List[Dict]:
+    grouped: Dict[Tuple, Dict] = {}
+    for res in results:
+        cfg_key = tuple(sorted(res.config.items()))
+        entry = grouped.setdefault(
+            cfg_key,
+            {
+                "config": res.config,
+                "per_dataset": [],
+            },
+        )
+        entry["per_dataset"].append(
+            {
+                "dataset_name": res.dataset_name,
+                "train_acc": res.train_acc,
+                "val_acc": res.val_acc,
+                "val_auc": res.val_auc,
+                "within_dist": res.within_dist,
+                "between_dist": res.between_dist,
+            }
+        )
+
+    summary: List[Dict] = []
+    for entry in grouped.values():
+        metric_vals = [
+            ds.get(metric)
+            for ds in entry["per_dataset"]
+            if ds.get(metric) is not None
+        ]
+        metric_vals = [float(v) for v in metric_vals if not np.isnan(v)]  # type: ignore[arg-type]
+        aggregate = float(np.mean(metric_vals)) if metric_vals else float("nan")
+        summary.append(
+            {
+                "config": entry["config"],
+                "aggregate_metric": aggregate,
+                "per_dataset": entry["per_dataset"],
+            }
+        )
+    summary.sort(key=lambda x: x["aggregate_metric"], reverse=True)
+    return summary
 
 
 def sweep_celeba(
@@ -382,7 +434,7 @@ def parse_args() -> argparse.Namespace:
         "--dataset_name",
         type=str,
         default="celeba_eyeglasses",
-         choices=list(DATASET_TO_ATTR.keys()),
+        choices=ALL_DATASETS + ["all"],
         help="Dataset identifier (determines target attribute).",
     )
     parser.add_argument(
@@ -403,6 +455,11 @@ def parse_args() -> argparse.Namespace:
         help="If set, run the full predefined sweep; otherwise run a single experiment with overrides.",
     )
     parser.add_argument(
+        "--aggregate",
+        action="store_true",
+        help="When sweeping multiple datasets, compute and store aggregate rankings.",
+    )
+    parser.add_argument(
         "--overrides",
         type=json.loads,
         default=None,
@@ -418,28 +475,45 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.dataset_name == "all":
+        dataset_list = ALL_DATASETS
+    else:
+        dataset_list = [args.dataset_name]
+
     if args.summarize:
-        summarize_best_configs(dataset_name=args.dataset_name)
+        for ds in dataset_list:
+            summarize_best_configs(dataset_name=ds)
         return
 
     if args.sweep:
-        sweep_celeba(
-            dataset_name=args.dataset_name,
-            base_config_path=args.base_config,
-            embedding_dir=args.embedding_dir,
-        )
+        sweep_results: List[ExperimentResult] = []
+        for ds in dataset_list:
+            sweep_results.extend(
+                sweep_celeba(
+                    dataset_name=ds,
+                    base_config_path=args.base_config,
+                    embedding_dir=args.embedding_dir,
+                )
+            )
+        if args.aggregate and len(dataset_list) > 1:
+            summary = _aggregate_results(sweep_results)
+            agg_path = HP_DIR / "celeba_all_aggregate.json"
+            agg_path.write_text(json.dumps(summary, indent=2))
+            print(f"[SWEEP] Saved aggregate summary to {agg_path}")
     else:
         if args.overrides is None:
             raise ValueError(
                 "When --sweep is not set, you must pass --overrides as a JSON dict."
             )
         overrides = args.overrides
-        overrides["dataset_name"] = args.dataset_name
-        run_experiment(
-            config=overrides,
-            base_config_path=args.base_config,
-            embedding_dir=args.embedding_dir,
-        )
+        for ds in dataset_list:
+            overrides_ds = dict(overrides)
+            overrides_ds["dataset_name"] = ds
+            run_experiment(
+                config=overrides_ds,
+                base_config_path=args.base_config,
+                embedding_dir=args.embedding_dir,
+            )
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-# Flow-based Contrastive Learning for Facial Attribute Classification (FCLF)
+# Learning to Flow by Flowing to Learn
 
 **CS229 Final Project - Fall 2025**
 
